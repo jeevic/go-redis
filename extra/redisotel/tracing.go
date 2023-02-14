@@ -12,12 +12,12 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/redis/go-redis/extra/rediscmd/v9"
-	"github.com/redis/go-redis/v9"
+	"github.com/jeevic/go-redis/extra/rediscmd/v9"
+	"github.com/jeevic/go-redis/v9"
 )
 
 const (
-	instrumName = "github.com/redis/go-redis/extra/redisotel"
+	instrumName = "github.com/jeevic/go-redis/extra/redisotel"
 )
 
 func InstrumentTracing(rdb redis.UniversalClient, opts ...TracingOption) error {

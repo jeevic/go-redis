@@ -3,7 +3,7 @@
 ## Installation
 
 ```bash
-go get github.com/redis/go-redis/extra/redisotel/v9
+go get github.com/jeevic/go-redis/extra/redisotel/v9
 ```
 
 ## Usage
@@ -12,8 +12,8 @@ Tracing is enabled by adding a hook:
 
 ```go
 import (
-    "github.com/redis/go-redis/v9"
-    "github.com/redis/go-redis/extra/redisotel/v9"
+    "github.com/jeevic/go-redis/v9"
+    "github.com/jeevic/go-redis/extra/redisotel/v9"
 )
 
 rdb := rdb.NewClient(&rdb.Options{...})

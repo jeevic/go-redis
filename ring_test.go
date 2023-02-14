@@ -12,7 +12,7 @@ import (
 	. "github.com/bsm/ginkgo/v2"
 	. "github.com/bsm/gomega"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/jeevic/go-redis/v9"
 )
 
 var _ = Describe("Redis Ring", func() {
