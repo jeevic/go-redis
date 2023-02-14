@@ -104,6 +104,11 @@ func NewConnPool(opt *Options) *ConnPool {
 	p.checkMinIdleConns()
 	p.connsMu.Unlock()
 
+	//有设置空闲超时时间
+	if opt.ConnMaxIdleTime > 0 {
+		go p.reaper(opt.ConnMaxIdleTime)
+	}
+
 	return p
 }
 
@@ -243,6 +248,9 @@ func (p *ConnPool) Get(ctx context.Context) (*Conn, error) {
 		return nil, err
 	}
 
+	var attempt int32 = 3
+	var i int32 = 0
+
 	for {
 		p.connsMu.Lock()
 		cn, err := p.popIdle()
@@ -253,11 +261,20 @@ func (p *ConnPool) Get(ctx context.Context) (*Conn, error) {
 		}
 
 		if cn == nil {
-			break
+			if atomic.LoadInt32(&i) == 0 {
+				// 如果无连接 检测下重新生成连接
+				p.checkMinIdleConns()
+			}
+			//尝试三次 中断
+			if atomic.AddInt32(&i, 1) >= attempt {
+				break
+			}
+			//其他情况继续找
+			continue
 		}
 
 		if !p.isHealthyConn(cn) {
-			_ = p.CloseConn(cn)
+			p.AsyncCloseConn(cn)
 			continue
 		}
 
@@ -266,7 +283,6 @@ func (p *ConnPool) Get(ctx context.Context) (*Conn, error) {
 	}
 
 	atomic.AddUint32(&p.stats.Misses, 1)
-
 	newcn, err := p.newConn(ctx, true)
 	if err != nil {
 		p.freeTurn()
@@ -274,6 +290,10 @@ func (p *ConnPool) Get(ctx context.Context) (*Conn, error) {
 	}
 
 	return newcn, nil
+}
+
+func (p *ConnPool) getTurn() {
+	p.queue <- struct{}{}
 }
 
 func (p *ConnPool) waitTurn(ctx context.Context) error {
@@ -343,12 +363,12 @@ func (p *ConnPool) popIdle() (*Conn, error) {
 func (p *ConnPool) Put(ctx context.Context, cn *Conn) {
 	if cn.rd.Buffered() > 0 {
 		internal.Logger.Printf(ctx, "Conn has unread data")
-		p.Remove(ctx, cn, BadConnError{})
+		p.AsyncRemove(ctx, cn, BadConnError{})
 		return
 	}
 
 	if !cn.pooled {
-		p.Remove(ctx, cn, nil)
+		p.AsyncRemove(ctx, cn, nil)
 		return
 	}
 
@@ -369,7 +389,9 @@ func (p *ConnPool) Put(ctx context.Context, cn *Conn) {
 	p.freeTurn()
 
 	if shouldCloseConn {
-		_ = p.closeConn(cn)
+		go func(cn *Conn) {
+			_ = p.closeConn(cn)
+		}(cn)
 	}
 }
 
@@ -379,9 +401,25 @@ func (p *ConnPool) Remove(_ context.Context, cn *Conn, reason error) {
 	_ = p.closeConn(cn)
 }
 
+func (p *ConnPool) AsyncRemove(_ context.Context, cn *Conn, reason error) {
+	p.removeConnWithLock(cn)
+	p.freeTurn()
+	go func(cn *Conn) {
+		_ = p.closeConn(cn)
+	}(cn)
+}
+
 func (p *ConnPool) CloseConn(cn *Conn) error {
 	p.removeConnWithLock(cn)
 	return p.closeConn(cn)
+}
+
+func (p *ConnPool) AsyncCloseConn(cn *Conn) {
+	p.removeConnWithLock(cn)
+	go func(cn *Conn) {
+		_ = p.closeConn(cn)
+	}(cn)
+	return
 }
 
 func (p *ConnPool) removeConnWithLock(cn *Conn) {
@@ -491,4 +529,83 @@ func (p *ConnPool) isHealthyConn(cn *Conn) bool {
 
 	cn.SetUsedAt(now)
 	return true
+}
+
+func (p *ConnPool) reaper(frequency time.Duration) {
+	ticker := time.NewTicker(frequency)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			// It is possible that ticker and closedCh arrive together,
+			// and select pseudo-randomly pick ticker case, we double
+			// check here to prevent being executed after closed.
+			if p.closed() {
+				return
+			}
+			_, err := p.ReapStaleConns()
+			if err != nil {
+				//internal.Logger.Printf(context.Background(), "ReapStaleConns failed: %s", err)
+				continue
+			}
+		}
+	}
+}
+
+func (p *ConnPool) ReapStaleConns() (int, error) {
+	var n int
+	for {
+
+		p.getTurn()
+
+		p.connsMu.Lock()
+		cn := p.reapStaleConn()
+		p.connsMu.Unlock()
+
+		p.freeTurn()
+
+		if cn != nil {
+			_ = p.closeConn(cn)
+			n++
+		} else {
+			break
+		}
+	}
+
+	atomic.AddUint32(&p.stats.StaleConns, uint32(n))
+	return n, nil
+}
+
+func (p *ConnPool) reapStaleConn() *Conn {
+	if len(p.idleConns) == 0 {
+		return nil
+	}
+
+	cn := p.idleConns[0]
+	if !p.isStaleConn(cn) {
+		return nil
+	}
+
+	p.idleConns = append(p.idleConns[:0], p.idleConns[1:]...)
+	p.idleConnsLen--
+	p.removeConn(cn)
+
+	return cn
+}
+
+func (p *ConnPool) isStaleConn(cn *Conn) bool {
+	now := time.Now()
+
+	if p.cfg.ConnMaxLifetime > 0 && now.Sub(cn.createdAt) >= p.cfg.ConnMaxLifetime {
+		return true
+	}
+	if p.cfg.ConnMaxIdleTime > 0 && now.Sub(cn.UsedAt()) >= p.cfg.ConnMaxIdleTime {
+		return true
+	}
+
+	if connCheck(cn.netConn) != nil {
+		return true
+	}
+
+	return false
 }

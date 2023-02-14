@@ -2,6 +2,8 @@ package pool_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -328,3 +330,39 @@ var _ = Describe("race", func() {
 		})
 	})
 })
+
+func TestConnPool_Get(t *testing.T) {
+	connPool := pool.NewConnPool(&pool.Options{
+		Dialer:          dummyDialer,
+		PoolSize:        10,
+		MinIdleConns:    5,
+		PoolTimeout:     time.Second,
+		ConnMaxIdleTime: time.Hour,
+	})
+	time.Sleep(5 * time.Second)
+	s, _ := json.Marshal(connPool.Stats())
+	fmt.Printf("start:%s\n", s)
+	ctx := context.Background()
+	N := 15
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 10000; j++ {
+				cn, err := connPool.Get(ctx)
+				if err != nil {
+					t.Errorf("go idx:%d err:%s", i, err.Error())
+				}
+				time.Sleep(3 * time.Millisecond)
+				connPool.Put(ctx, cn)
+			}
+
+		}(i)
+	}
+	wg.Wait()
+
+	s, _ = json.Marshal(connPool.Stats())
+	fmt.Printf("%s\n", s)
+
+}
