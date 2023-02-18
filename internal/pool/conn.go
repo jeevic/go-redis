@@ -95,6 +95,9 @@ func (cn *Conn) WithWriter(
 }
 
 func (cn *Conn) Close() error {
+	if tcpConn, ok := cn.netConn.(*net.TCPConn); ok {
+		_ = tcpConn.SetLinger(0)
+	}
 	return cn.netConn.Close()
 }
 

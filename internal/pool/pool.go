@@ -529,7 +529,8 @@ func (p *ConnPool) isHealthyConn(cn *Conn) bool {
 		return false
 	}
 
-	if connCheck(cn.netConn) != nil {
+	if err := connCheck(cn.netConn); err != nil {
+		internal.Logger.Printf(context.TODO(), "redis check err:%s", err.Error())
 		return false
 	}
 
@@ -547,7 +548,8 @@ func (p *ConnPool) isStaleConn(cn *Conn) bool {
 		return true
 	}
 
-	if connCheck(cn.netConn) != nil {
+	if err := connCheck(cn.netConn); err != nil {
+		internal.Logger.Printf(context.TODO(), "redis check stale err:%s", err.Error())
 		return true
 	}
 
