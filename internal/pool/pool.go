@@ -273,7 +273,7 @@ func (p *ConnPool) Get(ctx context.Context) (*Conn, error) {
 			p.AsyncCloseConn(cn)
 			continue
 		}
-
+		cn.SetUsedAt(time.Now())
 		atomic.AddUint32(&p.stats.Hits, 1)
 		return cn, nil
 	}
