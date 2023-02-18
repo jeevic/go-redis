@@ -35,7 +35,6 @@ func perform(n int, cbs ...func(int)) {
 }
 
 func dummyDialer(context.Context) (net.Conn, error) {
-	time.Sleep(500 * time.Millisecond)
 	return newDummyConn(), nil
 }
 
