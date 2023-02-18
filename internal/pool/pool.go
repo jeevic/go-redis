@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -530,7 +531,7 @@ func (p *ConnPool) isHealthyConn(cn *Conn) bool {
 	}
 
 	if err := connCheck(cn.netConn); err != nil {
-		internal.Logger.Printf(context.TODO(), "redis check err:%s", err.Error())
+		fmt.Printf("redis check err:%s", err.Error())
 		return false
 	}
 
@@ -549,7 +550,7 @@ func (p *ConnPool) isStaleConn(cn *Conn) bool {
 	}
 
 	if err := connCheck(cn.netConn); err != nil {
-		internal.Logger.Printf(context.TODO(), "redis check stale err:%s", err.Error())
+		fmt.Printf("redis check stale err:%s", err.Error())
 		return true
 	}
 
