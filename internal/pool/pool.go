@@ -106,10 +106,6 @@ func NewConnPool(opt *Options) *ConnPool {
 	p.checkMinIdleConns()
 	p.connsMu.Unlock()
 
-	if opt.ConnMaxIdleTime > 0 {
-		go p.reaper(opt.ConnMaxIdleTime)
-	}
-
 	return p
 }
 
