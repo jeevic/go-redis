@@ -273,7 +273,7 @@ func (p *ConnPool) Get(ctx context.Context) (*Conn, error) {
 			p.AsyncCloseConn(cn)
 			continue
 		}
-		cn.SetUsedAt(time.Now())
+
 		atomic.AddUint32(&p.stats.Hits, 1)
 		return cn, nil
 	}
@@ -524,11 +524,11 @@ func (p *ConnPool) isHealthyConn(cn *Conn) bool {
 	now := time.Now()
 
 	if p.cfg.ConnMaxLifetime > 0 && now.Sub(cn.createdAt) >= p.cfg.ConnMaxLifetime {
-		fmt.Printf("redis check conn max life time now:%s use at:%s, %d", now.Format(time.RFC3339Nano), cn.UsedAt().Format(time.RFC3339Nano), p.cfg.ConnMaxLifetime.Milliseconds())
+		fmt.Printf("redis check conn max life time now:%s use at:%s, %d\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), p.cfg.ConnMaxLifetime.Milliseconds())
 		return false
 	}
 	if p.cfg.ConnMaxIdleTime > 0 && now.Sub(cn.UsedAt()) >= p.cfg.ConnMaxIdleTime {
-		fmt.Printf("redis check conn max idle time now:%s use at:%s, %d", now.Format(time.RFC3339Nano), cn.UsedAt().Format(time.RFC3339Nano), p.cfg.ConnMaxIdleTime.Milliseconds())
+		fmt.Printf("redis check conn max idle time now:%s create at:%s use at:%s, %d\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), cn.UsedAt().Format("2006-01-02 15:04:05"), p.cfg.ConnMaxIdleTime.Milliseconds())
 		return false
 	}
 
@@ -545,11 +545,11 @@ func (p *ConnPool) isStaleConn(cn *Conn) bool {
 	now := time.Now()
 
 	if p.cfg.ConnMaxLifetime > 0 && now.Sub(cn.createdAt) >= p.cfg.ConnMaxLifetime {
-		fmt.Printf("redis stale check conn max life time now:%s use at:%s, %d", now.Format(time.RFC3339Nano), cn.UsedAt().Format(time.RFC3339Nano), p.cfg.ConnMaxLifetime.Milliseconds())
+		fmt.Printf("redis stale check conn max life time now:%s use at:%s, %d\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), p.cfg.ConnMaxLifetime.Milliseconds())
 		return true
 	}
 	if p.cfg.ConnMaxIdleTime > 0 && now.Sub(cn.UsedAt()) >= p.cfg.ConnMaxIdleTime {
-		fmt.Printf("redis stale  check conn max idle time now:%s use at:%s, %d", now.Format(time.RFC3339Nano), cn.UsedAt().Format(time.RFC3339Nano), p.cfg.ConnMaxIdleTime.Milliseconds())
+		fmt.Printf("redis stale  check conn max idle time now:%s created_at:%s use at:%s, %d\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), cn.UsedAt().Format("2006-01-02 15:04:05"), p.cfg.ConnMaxIdleTime.Milliseconds())
 		return true
 	}
 
@@ -573,11 +573,7 @@ func (p *ConnPool) reaper(frequency time.Duration) {
 			if p.closed() {
 				return
 			}
-			_, err := p.ReapStaleConns()
-			if err != nil {
-				//internal.Logger.Printf(context.Background(), "ReapStaleConns failed: %s", err)
-				continue
-			}
+			_, _ = p.ReapStaleConns()
 		}
 	}
 }
@@ -612,7 +608,7 @@ func (p *ConnPool) reapStaleConn() *Conn {
 
 	el := p.idleConns.Front()
 	cn := el.Value.(*Conn)
-	if p.isStaleConn(cn) {
+	if !p.isStaleConn(cn) {
 		return nil
 	}
 	p.idleConns.Remove(el)
