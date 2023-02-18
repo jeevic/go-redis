@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"net"
@@ -78,8 +79,8 @@ type ConnPool struct {
 	queue chan struct{}
 
 	connsMu   sync.Mutex
-	conns     []*Conn
-	idleConns []*Conn
+	conns     *list.List
+	idleConns *list.List
 
 	poolSize     int
 	idleConnsLen int
@@ -96,13 +97,17 @@ func NewConnPool(opt *Options) *ConnPool {
 		cfg: opt,
 
 		queue:     make(chan struct{}, opt.PoolSize),
-		conns:     make([]*Conn, 0, opt.PoolSize),
-		idleConns: make([]*Conn, 0, opt.PoolSize),
+		conns:     list.New(),
+		idleConns: list.New(),
 	}
 
 	p.connsMu.Lock()
 	p.checkMinIdleConns()
 	p.connsMu.Unlock()
+
+	if opt.ConnMaxIdleTime > 0 {
+		go p.reaper(opt.ConnMaxIdleTime)
+	}
 
 	return p
 }
@@ -114,7 +119,6 @@ func (p *ConnPool) checkMinIdleConns() {
 	for p.poolSize < p.cfg.PoolSize && p.idleConnsLen < p.cfg.MinIdleConns {
 		p.poolSize++
 		p.idleConnsLen++
-
 		go func() {
 			err := p.addIdleConn()
 			if err != nil && err != ErrClosed {
@@ -142,8 +146,8 @@ func (p *ConnPool) addIdleConn() error {
 		return ErrClosed
 	}
 
-	p.conns = append(p.conns, cn)
-	p.idleConns = append(p.idleConns, cn)
+	p.conns.PushBack(cn)
+	p.idleConns.PushBack(cn)
 	return nil
 }
 
@@ -166,7 +170,7 @@ func (p *ConnPool) newConn(ctx context.Context, pooled bool) (*Conn, error) {
 		return nil, ErrClosed
 	}
 
-	p.conns = append(p.conns, cn)
+	p.conns.PushBack(cn)
 	if pooled {
 		// If pool is full remove the cn on next Put.
 		if p.poolSize >= p.cfg.PoolSize {
@@ -256,10 +260,6 @@ func (p *ConnPool) Get(ctx context.Context) (*Conn, error) {
 		}
 
 		if cn == nil {
-			if atomic.LoadInt32(&i) == 0 {
-				// 如果无连接 检测下重新生成连接
-				p.checkMinIdleConns()
-			}
 			//尝试三次 中断
 			if atomic.AddInt32(&i, 1) >= attempt {
 				break
@@ -335,22 +335,24 @@ func (p *ConnPool) popIdle() (*Conn, error) {
 	if p.closed() {
 		return nil, ErrClosed
 	}
-	n := len(p.idleConns)
+	n := p.idleConns.Len()
 	if n == 0 {
 		return nil, nil
 	}
 
 	var cn *Conn
+	var el *list.Element
 	if p.cfg.PoolFIFO {
-		cn = p.idleConns[0]
-		copy(p.idleConns, p.idleConns[1:])
-		p.idleConns = p.idleConns[:n-1]
+		el = p.idleConns.Front()
 	} else {
-		idx := n - 1
-		cn = p.idleConns[idx]
-		p.idleConns = p.idleConns[:idx]
+		el = p.idleConns.Back()
 	}
-	p.idleConnsLen--
+	if el != nil {
+		cn = el.Value.(*Conn)
+		//移出元素
+		p.idleConns.Remove(el)
+		p.idleConnsLen--
+	}
 	p.checkMinIdleConns()
 	return cn, nil
 }
@@ -372,7 +374,7 @@ func (p *ConnPool) Put(ctx context.Context, cn *Conn) {
 	p.connsMu.Lock()
 
 	if p.cfg.MaxIdleConns == 0 || p.idleConnsLen < p.cfg.MaxIdleConns {
-		p.idleConns = append(p.idleConns, cn)
+		p.idleConns.PushBack(cn)
 		p.idleConnsLen++
 	} else {
 		p.removeConn(cn)
@@ -406,11 +408,13 @@ func (p *ConnPool) AsyncRemove(_ context.Context, cn *Conn, reason error) {
 
 func (p *ConnPool) CloseConn(cn *Conn) error {
 	p.removeConnWithLock(cn)
+	atomic.AddUint32(&p.stats.StaleConns, 1)
 	return p.closeConn(cn)
 }
 
 func (p *ConnPool) AsyncCloseConn(cn *Conn) {
 	p.removeConnWithLock(cn)
+	atomic.AddUint32(&p.stats.StaleConns, 1)
 	go func(cn *Conn) {
 		_ = p.closeConn(cn)
 	}(cn)
@@ -424,9 +428,11 @@ func (p *ConnPool) removeConnWithLock(cn *Conn) {
 }
 
 func (p *ConnPool) removeConn(cn *Conn) {
-	for i, c := range p.conns {
+	var c *Conn
+	for e := p.conns.Front(); e != nil; e = e.Next() {
+		c = e.Value.(*Conn)
 		if c == cn {
-			p.conns = append(p.conns[:i], p.conns[i+1:]...)
+			p.conns.Remove(e)
 			if cn.pooled {
 				p.poolSize--
 				p.checkMinIdleConns()
@@ -443,7 +449,7 @@ func (p *ConnPool) closeConn(cn *Conn) error {
 // Len returns total number of connections.
 func (p *ConnPool) Len() int {
 	p.connsMu.Lock()
-	n := len(p.conns)
+	n := p.conns.Len()
 	p.connsMu.Unlock()
 	return n
 }
@@ -477,7 +483,10 @@ func (p *ConnPool) Filter(fn func(*Conn) bool) error {
 	defer p.connsMu.Unlock()
 
 	var firstErr error
-	for _, cn := range p.conns {
+
+	var cn *Conn
+	for e := p.conns.Front(); e != nil; e = e.Next() {
+		cn = e.Value.(*Conn)
 		if fn(cn) {
 			if err := p.closeConn(cn); err != nil && firstErr == nil {
 				firstErr = err
@@ -494,7 +503,9 @@ func (p *ConnPool) Close() error {
 
 	var firstErr error
 	p.connsMu.Lock()
-	for _, cn := range p.conns {
+	var cn *Conn
+	for e := p.conns.Front(); e != nil; e = e.Next() {
+		cn = e.Value.(*Conn)
 		if err := p.closeConn(cn); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -526,6 +537,23 @@ func (p *ConnPool) isHealthyConn(cn *Conn) bool {
 	return true
 }
 
+func (p *ConnPool) isStaleConn(cn *Conn) bool {
+	now := time.Now()
+
+	if p.cfg.ConnMaxLifetime > 0 && now.Sub(cn.createdAt) >= p.cfg.ConnMaxLifetime {
+		return true
+	}
+	if p.cfg.ConnMaxIdleTime > 0 && now.Sub(cn.UsedAt()) >= p.cfg.ConnMaxIdleTime {
+		return true
+	}
+
+	if connCheck(cn.netConn) != nil {
+		return true
+	}
+
+	return false
+}
+
 func (p *ConnPool) reaper(frequency time.Duration) {
 	ticker := time.NewTicker(frequency)
 	defer ticker.Stop()
@@ -550,7 +578,6 @@ func (p *ConnPool) reaper(frequency time.Duration) {
 func (p *ConnPool) ReapStaleConns() (int, error) {
 	var n int
 	for {
-
 		p.getTurn()
 
 		p.connsMu.Lock()
@@ -572,35 +599,17 @@ func (p *ConnPool) ReapStaleConns() (int, error) {
 }
 
 func (p *ConnPool) reapStaleConn() *Conn {
-	if len(p.idleConns) == 0 {
+	if p.idleConns.Len() == 0 {
 		return nil
 	}
 
-	cn := p.idleConns[0]
+	el := p.idleConns.Front()
+	cn := el.Value.(*Conn)
 	if !p.isStaleConn(cn) {
 		return nil
 	}
-
-	p.idleConns = append(p.idleConns[:0], p.idleConns[1:]...)
+	p.idleConns.Remove(el)
 	p.idleConnsLen--
 	p.removeConn(cn)
-
 	return cn
-}
-
-func (p *ConnPool) isStaleConn(cn *Conn) bool {
-	now := time.Now()
-
-	if p.cfg.ConnMaxLifetime > 0 && now.Sub(cn.createdAt) >= p.cfg.ConnMaxLifetime {
-		return true
-	}
-	if p.cfg.ConnMaxIdleTime > 0 && now.Sub(cn.UsedAt()) >= p.cfg.ConnMaxIdleTime {
-		return true
-	}
-
-	if connCheck(cn.netConn) != nil {
-		return true
-	}
-
-	return false
 }

@@ -354,7 +354,7 @@ func TestConnPool_Get(t *testing.T) {
 				if err != nil {
 					t.Errorf("go idx:%d err:%s", i, err.Error())
 				}
-				time.Sleep(3 * time.Millisecond)
+				time.Sleep(1 * time.Millisecond)
 				connPool.Put(ctx, cn)
 			}
 
