@@ -34,6 +34,7 @@ func BenchmarkPoolGetPut(b *testing.B) {
 				PoolSize:        bm.poolSize,
 				PoolTimeout:     time.Second,
 				ConnMaxIdleTime: time.Hour,
+				PoolFIFO:        true,
 			})
 
 			b.ResetTimer()

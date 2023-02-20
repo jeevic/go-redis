@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -518,100 +517,17 @@ func (p *ConnPool) Close() error {
 
 func (p *ConnPool) isHealthyConn(cn *Conn) bool {
 	now := time.Now()
-	host := ""
-	if cn.RemoteAddr() != nil {
-		host = cn.RemoteAddr().String()
-	}
 	if p.cfg.ConnMaxLifetime > 0 && now.Sub(cn.createdAt) >= p.cfg.ConnMaxLifetime {
-		fmt.Printf("redis check conn max life time now:%s use at:%s, %d idle con Len:%d idle Len %d host:%s\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), p.cfg.ConnMaxLifetime.Milliseconds(), p.idleConns.Len(), p.idleConnsLen, host)
 		return false
 	}
 	if p.cfg.ConnMaxIdleTime > 0 && now.Sub(cn.UsedAt()) >= p.cfg.ConnMaxIdleTime {
-		fmt.Printf("redis check conn max idle time now:%s create at:%s use at:%s, %d idle con Len:%d idle Len %d pool size:%d, host:%s\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), cn.UsedAt().Format("2006-01-02 15:04:05"), p.cfg.ConnMaxIdleTime.Milliseconds(), p.idleConns.Len(), p.idleConnsLen, p.poolSize, host)
 		return false
 	}
-
+	//check is slow we can use
 	if err := connCheck(cn.netConn); err != nil {
-		fmt.Printf("redis check err:%s time now:%s create at:%s use at:%s, %d idle con Len:%d idle Len %d host:%s\n", err.Error(), now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), cn.UsedAt().Format("2006-01-02 15:04:05"), p.cfg.ConnMaxIdleTime.Milliseconds(), p.idleConns.Len(), p.idleConnsLen, host)
 		return false
 	}
 
 	cn.SetUsedAt(now)
 	return true
-}
-
-func (p *ConnPool) isStaleConn(cn *Conn) bool {
-	now := time.Now()
-
-	if p.cfg.ConnMaxLifetime > 0 && now.Sub(cn.createdAt) >= p.cfg.ConnMaxLifetime {
-		fmt.Printf("redis stale check conn max life time now:%s use at:%s, %d\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), p.cfg.ConnMaxLifetime.Milliseconds())
-		return true
-	}
-	if p.cfg.ConnMaxIdleTime > 0 && now.Sub(cn.UsedAt()) >= p.cfg.ConnMaxIdleTime {
-		fmt.Printf("redis stale  check conn max idle time now:%s created_at:%s use at:%s, %d\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), cn.UsedAt().Format("2006-01-02 15:04:05"), p.cfg.ConnMaxIdleTime.Milliseconds())
-		return true
-	}
-
-	if err := connCheck(cn.netConn); err != nil {
-		fmt.Printf("redis stale check  err:%s", err.Error())
-		return true
-	}
-
-	return false
-}
-
-func (p *ConnPool) reaper(frequency time.Duration) {
-	ticker := time.NewTicker(frequency)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			// It is possible that ticker and closedCh arrive together,
-			// and select pseudo-randomly pick ticker case, we double
-			// check here to prevent being executed after closed.
-			if p.closed() {
-				return
-			}
-			_, _ = p.ReapStaleConns()
-		}
-	}
-}
-
-func (p *ConnPool) ReapStaleConns() (int, error) {
-	var n int
-	for {
-		p.getTurn()
-
-		p.connsMu.Lock()
-		cn := p.reapStaleConn()
-		p.connsMu.Unlock()
-
-		p.freeTurn()
-
-		if cn != nil {
-			_ = p.closeConn(cn)
-			n++
-		} else {
-			break
-		}
-	}
-
-	atomic.AddUint32(&p.stats.StaleConns, uint32(n))
-	return n, nil
-}
-
-func (p *ConnPool) reapStaleConn() *Conn {
-	if p.idleConns.Len() == 0 {
-		return nil
-	}
-
-	el := p.idleConns.Front()
-	cn := el.Value.(*Conn)
-	if !p.isStaleConn(cn) {
-		return nil
-	}
-	p.idleConns.Remove(el)
-	p.idleConnsLen--
-	p.removeConn(cn)
-	return cn
 }
