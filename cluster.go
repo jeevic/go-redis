@@ -1137,6 +1137,24 @@ func (c *ClusterClient) PoolStats() *PoolStats {
 	return &acc
 }
 
+func (c *ClusterClient) PoolNodeStats() map[string]*PoolStats {
+	var accMaps = make(map[string]*PoolStats)
+	state, _ := c.state.Get(context.TODO())
+	if state == nil {
+		return accMaps
+	}
+	for _, node := range state.Masters {
+		key := fmt.Sprintf("%s-%s", "master", node.Client.String())
+		accMaps[key] = (*PoolStats)(node.Client.connPool.Stats())
+	}
+	for _, node := range state.Slaves {
+		key := fmt.Sprintf("%s-%s", "slave", node.Client.String())
+		accMaps[key] = (*PoolStats)(node.Client.connPool.Stats())
+	}
+
+	return accMaps
+}
+
 func (c *ClusterClient) loadState(ctx context.Context) (*clusterState, error) {
 	if c.opt.ClusterSlots != nil {
 		slots, err := c.opt.ClusterSlots(ctx)
