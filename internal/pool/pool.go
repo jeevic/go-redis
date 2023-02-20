@@ -518,18 +518,21 @@ func (p *ConnPool) Close() error {
 
 func (p *ConnPool) isHealthyConn(cn *Conn) bool {
 	now := time.Now()
-
+	host := ""
+	if cn.RemoteAddr() != nil {
+		host = cn.RemoteAddr().String()
+	}
 	if p.cfg.ConnMaxLifetime > 0 && now.Sub(cn.createdAt) >= p.cfg.ConnMaxLifetime {
-		fmt.Printf("redis check conn max life time now:%s use at:%s, %d\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), p.cfg.ConnMaxLifetime.Milliseconds())
+		fmt.Printf("redis check conn max life time now:%s use at:%s, %d idle con Len:%d idle Len %d host:%s\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), p.cfg.ConnMaxLifetime.Milliseconds(), p.idleConns.Len(), p.idleConnsLen, host)
 		return false
 	}
 	if p.cfg.ConnMaxIdleTime > 0 && now.Sub(cn.UsedAt()) >= p.cfg.ConnMaxIdleTime {
-		fmt.Printf("redis check conn max idle time now:%s create at:%s use at:%s, %d\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), cn.UsedAt().Format("2006-01-02 15:04:05"), p.cfg.ConnMaxIdleTime.Milliseconds())
+		fmt.Printf("redis check conn max idle time now:%s create at:%s use at:%s, %d idle con Len:%d idle Len %d pool size:%d, host:%s\n", now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), cn.UsedAt().Format("2006-01-02 15:04:05"), p.cfg.ConnMaxIdleTime.Milliseconds(), p.idleConns.Len(), p.idleConnsLen, p.poolSize, host)
 		return false
 	}
 
 	if err := connCheck(cn.netConn); err != nil {
-		fmt.Printf("redis check err:%s", err.Error())
+		fmt.Printf("redis check err:%s time now:%s create at:%s use at:%s, %d idle con Len:%d idle Len %d host:%s\n", err.Error(), now.Format("2006-01-02 15:04:05"), cn.createdAt.Format("2006-01-02 15:04:05"), cn.UsedAt().Format("2006-01-02 15:04:05"), p.cfg.ConnMaxIdleTime.Milliseconds(), p.idleConns.Len(), p.idleConnsLen, host)
 		return false
 	}
 
